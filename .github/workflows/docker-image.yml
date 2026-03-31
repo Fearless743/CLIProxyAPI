@@ -5,10 +5,6 @@ on:
     tags:
       - v*
 
-env:
-  APP_NAME: CLIProxyAPI
-  GHCR_REPO: ghcr.io/${{ github.repository_owner }}/cli-proxy-api
-
 permissions:
   contents: read
   packages: write
@@ -34,8 +30,9 @@ jobs:
       - name: Generate Build Metadata
         run: |
           echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
-          echo COMMIT=`git rev-parse --short HEAD` >> $GITHUB_ENV
-          echo BUILD_DATE=`date -u +%Y-%m-%dT%H:%M:%SZ` >> $GITHUB_ENV
+          echo COMMIT=$(git rev-parse --short HEAD) >> $GITHUB_ENV
+          echo BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) >> $GITHUB_ENV
+          echo "GHCR_REPO=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cli-proxy-api" >> $GITHUB_ENV
       - name: Build and push (amd64)
         uses: docker/build-push-action@v6
         with:
@@ -70,8 +67,9 @@ jobs:
       - name: Generate Build Metadata
         run: |
           echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
-          echo COMMIT=`git rev-parse --short HEAD` >> $GITHUB_ENV
-          echo BUILD_DATE=`date -u +%Y-%m-%dT%H:%M:%SZ` >> $GITHUB_ENV
+          echo COMMIT=$(git rev-parse --short HEAD) >> $GITHUB_ENV
+          echo BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) >> $GITHUB_ENV
+          echo "GHCR_REPO=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cli-proxy-api" >> $GITHUB_ENV
       - name: Build and push (arm64)
         uses: docker/build-push-action@v6
         with:
@@ -103,6 +101,7 @@ jobs:
       - name: Generate Build Metadata
         run: |
           echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
+          echo "GHCR_REPO=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cli-proxy-api" >> $GITHUB_ENV
       - name: Create and push multi-arch manifests
         run: |
           docker buildx imagetools create \
