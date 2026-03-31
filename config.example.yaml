@@ -286,6 +286,13 @@ nonstream-keepalive-interval: 0
 # you select the protocol surface, but inference backend selection can still follow the resolved
 # model/alias. For strict backend pinning, use unique aliases/prefixes or avoid overlapping names.
 # You can repeat the same name with different aliases to expose multiple client model names.
+# MODEL POOL: You can configure multiple models with the same alias to create a model pool.
+# Requests to the alias will be distributed across the pool using round-robin.
+# Example: gemini-cli with two models sharing alias "my-model":
+#   - name: "gemini-2.5-pro"
+#     alias: "my-model"
+#   - name: "gemini-2.5-flash"
+#     alias: "my-model"
 # oauth-model-alias:
 #   gemini-cli:
 #     - name: "gemini-2.5-pro"          # original model name under this channel

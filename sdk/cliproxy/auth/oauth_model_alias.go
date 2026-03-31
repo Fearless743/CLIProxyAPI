@@ -13,8 +13,8 @@ type modelAliasEntry interface {
 }
 
 type oauthModelAliasTable struct {
-	// reverse maps channel -> alias (lower) -> original upstream model name.
-	reverse map[string]map[string]string
+	// reverse maps channel -> alias (lower) -> original upstream model names (multiple names allowed for same alias).
+	reverse map[string]map[string][]string
 }
 
 func compileOAuthModelAliasTable(aliases map[string][]internalconfig.OAuthModelAlias) *oauthModelAliasTable {
@@ -22,14 +22,14 @@ func compileOAuthModelAliasTable(aliases map[string][]internalconfig.OAuthModelA
 		return &oauthModelAliasTable{}
 	}
 	out := &oauthModelAliasTable{
-		reverse: make(map[string]map[string]string, len(aliases)),
+		reverse: make(map[string]map[string][]string, len(aliases)),
 	}
 	for rawChannel, entries := range aliases {
 		channel := strings.ToLower(strings.TrimSpace(rawChannel))
 		if channel == "" || len(entries) == 0 {
 			continue
 		}
-		rev := make(map[string]string, len(entries))
+		rev := make(map[string][]string, len(entries))
 		for _, entry := range entries {
 			name := strings.TrimSpace(entry.Name)
 			alias := strings.TrimSpace(entry.Alias)
@@ -40,10 +40,7 @@ func compileOAuthModelAliasTable(aliases map[string][]internalconfig.OAuthModelA
 				continue
 			}
 			aliasKey := strings.ToLower(alias)
-			if _, exists := rev[aliasKey]; exists {
-				continue
-			}
-			rev[aliasKey] = name
+			rev[aliasKey] = append(rev[aliasKey], name)
 		}
 		if len(rev) > 0 {
 			out.reverse[channel] = rev
@@ -186,6 +183,68 @@ func (m *Manager) resolveOAuthUpstreamModel(auth *Auth, requestedModel string) s
 	return resolveUpstreamModelFromAliasTable(m, auth, requestedModel, modelAliasChannel(auth))
 }
 
+// resolveOAuthUpstreamModelPool resolves multiple upstream model names from OAuth model alias.
+// If an alias maps to multiple upstream models, returns all of them.
+// If the alias doesn't exist or maps to a single model, returns nil (use resolveOAuthUpstreamModel instead).
+func (m *Manager) resolveOAuthUpstreamModelPool(auth *Auth, requestedModel string) []string {
+	channel := modelAliasChannel(auth)
+	if m == nil || auth == nil || channel == "" {
+		return nil
+	}
+
+	requestedModel = strings.TrimSpace(requestedModel)
+	if requestedModel == "" {
+		return nil
+	}
+
+	requestResult := thinking.ParseSuffix(requestedModel)
+	baseModel := requestResult.ModelName
+
+	candidates := []string{baseModel}
+	if baseModel != requestedModel {
+		candidates = append(candidates, requestedModel)
+	}
+
+	raw := m.oauthModelAlias.Load()
+	table, _ := raw.(*oauthModelAliasTable)
+	if table == nil || table.reverse == nil {
+		return nil
+	}
+	rev := table.reverse[channel]
+	if rev == nil {
+		return nil
+	}
+
+	for _, candidate := range candidates {
+		key := strings.ToLower(strings.TrimSpace(candidate))
+		if key == "" {
+			continue
+		}
+		originals, ok := rev[key]
+		if !ok || len(originals) == 0 {
+			continue
+		}
+		// Only return pool if there are multiple models.
+		if len(originals) == 1 {
+			return nil
+		}
+		// Apply suffix preservation to each model.
+		out := make([]string, len(originals))
+		for i, original := range originals {
+			if thinking.ParseSuffix(original).HasSuffix {
+				out[i] = original
+			} else if requestResult.HasSuffix && requestResult.RawSuffix != "" {
+				out[i] = original + "(" + requestResult.RawSuffix + ")"
+			} else {
+				out[i] = original
+			}
+		}
+		return out
+	}
+
+	return nil
+}
+
 func resolveUpstreamModelFromAliasTable(m *Manager, auth *Auth, requestedModel, channel string) string {
 	if m == nil || auth == nil {
 		return ""
@@ -219,10 +278,13 @@ func resolveUpstreamModelFromAliasTable(m *Manager, auth *Auth, requestedModel, 
 		if key == "" {
 			continue
 		}
-		original := strings.TrimSpace(rev[key])
-		if original == "" {
+		originals, ok := rev[key]
+		if !ok || len(originals) == 0 {
 			continue
 		}
+		// For backward compatibility, return the first model.
+		// Use resolveOAuthUpstreamModelPool for multiple models.
+		original := originals[0]
 		if strings.EqualFold(original, baseModel) {
 			return ""
 		}

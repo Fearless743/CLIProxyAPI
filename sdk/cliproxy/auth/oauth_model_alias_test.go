@@ -194,3 +194,143 @@ func TestApplyOAuthModelAlias_SuffixPreservation(t *testing.T) {
 		t.Errorf("applyOAuthModelAlias() model = %q, want %q", resolvedModel, "gemini-2.5-pro-exp-03-25(8192)")
 	}
 }
+
+func TestResolveOAuthUpstreamModelPool_MultipleModels(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		aliases map[string][]internalconfig.OAuthModelAlias
+		channel string
+		input   string
+		want    []string
+	}{
+		{
+			name: "two models with same alias returns pool",
+			aliases: map[string][]internalconfig.OAuthModelAlias{
+				"gemini-cli": {
+					{Name: "gemini-2.5-pro-exp-03-25", Alias: "my-model"},
+					{Name: "gemini-2.5-flash-8b", Alias: "my-model"},
+				},
+			},
+			channel: "gemini-cli",
+			input:   "my-model",
+			want:    []string{"gemini-2.5-pro-exp-03-25", "gemini-2.5-flash-8b"},
+		},
+		{
+			name: "single model returns nil (use resolveOAuthUpstreamModel)",
+			aliases: map[string][]internalconfig.OAuthModelAlias{
+				"gemini-cli": {
+					{Name: "gemini-2.5-pro-exp-03-25", Alias: "my-model"},
+				},
+			},
+			channel: "gemini-cli",
+			input:   "my-model",
+			want:    nil,
+		},
+		{
+			name: "no alias returns nil",
+			aliases: map[string][]internalconfig.OAuthModelAlias{
+				"gemini-cli": {
+					{Name: "gemini-2.5-pro-exp-03-25", Alias: "my-model"},
+				},
+			},
+			channel: "gemini-cli",
+			input:   "unknown-model",
+			want:    nil,
+		},
+		{
+			name: "suffix preserved in pool",
+			aliases: map[string][]internalconfig.OAuthModelAlias{
+				"claude": {
+					{Name: "claude-sonnet-4-5-20250514", Alias: "cs4"},
+					{Name: "claude-haiku-4-5-20250514", Alias: "cs4"},
+				},
+			},
+			channel: "claude",
+			input:   "cs4(high)",
+			want:    []string{"claude-sonnet-4-5-20250514(high)", "claude-haiku-4-5-20250514(high)"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mgr := NewManager(nil, nil, nil)
+			mgr.SetConfig(&internalconfig.Config{})
+			mgr.SetOAuthModelAlias(tt.aliases)
+
+			auth := createAuthForChannel(tt.channel)
+			got := mgr.resolveOAuthUpstreamModelPool(auth, tt.input)
+			if len(got) != len(tt.want) {
+				t.Errorf("resolveOAuthUpstreamModelPool(%q) returned %v, want %v", tt.input, got, tt.want)
+				return
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("resolveOAuthUpstreamModelPool(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestOAuthModelPoolRotation(t *testing.T) {
+	t.Parallel()
+
+	// Test that model pool rotates correctly using the rotation logic
+	aliases := map[string][]internalconfig.OAuthModelAlias{
+		"gemini-cli": {
+			{Name: "gemini-2.5-pro", Alias: "my-model"},
+			{Name: "gemini-2.5-flash", Alias: "my-model"},
+			{Name: "gemini-2.5-flash-lite", Alias: "my-model"},
+		},
+	}
+
+	mgr := NewManager(nil, nil, nil)
+	mgr.SetConfig(&internalconfig.Config{})
+	mgr.SetOAuthModelAlias(aliases)
+
+	// Create auth with proper attributes for channel resolution
+	auth := &Auth{
+		ID:         "test-auth",
+		Provider:   "gemini-cli",
+		Attributes: map[string]string{},
+	}
+
+	// Debug: verify pool resolution
+	pool := mgr.resolveOAuthUpstreamModelPool(auth, "my-model")
+	if len(pool) != 3 {
+		t.Fatalf("resolveOAuthUpstreamModelPool returned %d models, want 3: %v", len(pool), pool)
+	}
+
+	// Simulate 3 consecutive requests to test rotation
+	// The pool rotation should work like OpenAICompat pool
+	calls := make([]string, 0, 9)
+	for i := 0; i < 9; i++ {
+		models, pooled := mgr.preparedExecutionModels(auth, "my-model")
+		if !pooled {
+			t.Fatalf("expected pooled models, got %v", models)
+		}
+		if len(models) != 3 {
+			t.Fatalf("expected 3 models in pool, got %d", len(models))
+		}
+		// First model is the one that will be tried
+		calls = append(calls, models[0])
+	}
+
+	// Each model should be called 3 times (round-robin)
+	expected := []string{"gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+		"gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+		"gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"}
+
+	if len(calls) != len(expected) {
+		t.Fatalf("calls = %v, want %v", calls, expected)
+	}
+	for i := range calls {
+		if calls[i] != expected[i] {
+			t.Errorf("call %d = %q, want %q", i, calls[i], expected[i])
+		}
+	}
+}
